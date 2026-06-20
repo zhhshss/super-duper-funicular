@@ -1,4 +1,4 @@
-name: Build and Publish Codeserver (Root Version)
+name: Build and Publish HuggingFace Codeserver (Root + Password)
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
 
       - name: Generate Docker Context Files
         run: |
-          # 1. 极简版 Nginx 配置 (Root 权限直接运行，不需要改临时目录)
+          # 1. 极简版 Nginx 配置 (Root 权限直接运行)
           cat << 'EOF' > nginx.conf
           events {
               worker_connections 1024;
@@ -86,11 +86,17 @@ jobs:
           </html>
           EOF
 
-          # 3. 启动脚本 (全程 Root，直接起 nginx 和 code-server)
+          # 3. 启动脚本 (全程 Root，加入密码验证逻辑)
           cat << 'EOF' > entrypoint.sh
           #!/bin/bash
           nginx
-          exec code-server --bind-addr 127.0.0.1:8080 --auth none
+          
+          # 读取外部环境变量 PASSWORD
+          # 如果外部没有提供密码，则使用默认密码 "huggingface2026"（你可以自行修改）
+          export PASSWORD=${PASSWORD:-"huggingface2026"}
+          
+          # 启用密码验证启动 code-server
+          exec code-server --bind-addr 127.0.0.1:8080 --auth password
           EOF
 
           # 4. Dockerfile (去掉所有权限切换，一路 Root 到底)
@@ -121,7 +127,7 @@ jobs:
               && code-server --install-extension eamodio.gitlens \
               && code-server --install-extension dbaeumer.vscode-eslint
 
-          # 暴露 7860 端口
+          # 暴露 Hugging Face 要求的 7860 端口
           EXPOSE 7860
 
           ENTRYPOINT ["/entrypoint.sh"]
