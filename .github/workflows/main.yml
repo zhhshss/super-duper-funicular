@@ -1,8 +1,8 @@
-name: Build and Publish Codeserver
+name: Build and Publish Codeserver (Root Version)
 
 on:
   push:
-    branches: [ "main" ] # 触发构建的分支，可根据需要修改为 master 或其他分支
+    branches: [ "main" ]
 
 env:
   REGISTRY: ghcr.io
@@ -19,10 +19,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 核心步骤：在云端构建时动态生成所有依赖的子配置文件
       - name: Generate Docker Context Files
         run: |
-          # 1. 生成 Nginx 路由配置文件
+          # 1. 极简版 Nginx 配置 (Root 权限直接运行，不需要改临时目录)
           cat << 'EOF' > nginx.conf
           events {
               worker_connections 1024;
@@ -32,21 +31,21 @@ jobs:
               default_type application/octet-stream;
 
               server {
-                  listen 7890;
+                  listen 7860;
 
-                  # 根路径：显示伪装的 AI 网页
+                  # 伪装的 AI 网页
                   location / {
                       root /var/www/html;
                       index index.html;
                   }
 
-                  # 健康检查接口
+                  # 健康检查
                   location = /health {
-                      return 200 '{"status": "healthy", "service": "ai-platform", "timestamp": "rolling"}';
+                      return 200 '{"status": "healthy", "service": "ai-node-root"}';
                       add_header Content-Type application/json;
                   }
 
-                  # 隐藏的 Codespace 访问路径 (支持 WebSocket 协议转发)
+                  # 隐藏的 Codespace
                   location /110133b6-2a08-4973-87ae-ee13b59a68a4/ {
                       proxy_pass http://127.0.0.1:8080/;
                       proxy_set_header Host $host;
@@ -60,80 +59,70 @@ jobs:
           }
           EOF
 
-          # 2. 生成伪装的 AI 首页
+          # 2. 伪装网页
           cat << 'EOF' > index.html
           <!DOCTYPE html>
           <html lang="en">
           <head>
               <meta charset="UTF-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1.0">
-              <title>AI Large Model Training Platform</title>
+              <title>Model Inference API</title>
               <style>
-                  body { background-color: #0b0f19; color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                  .container { text-align: center; max-width: 600px; padding: 20px; }
-                  h1 { color: #3b82f6; font-size: 2.5rem; margin-bottom: 1rem; font-weight: 600; letter-spacing: -0.05em; }
-                  p { color: #9ca3af; font-size: 1.1rem; line-height: 1.6; }
-                  .status-card { background-color: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 1.5rem; margin-top: 2rem; display: inline-flex; align-items: center; gap: 10px; }
-                  .dot { width: 10px; height: 10px; background-color: #10b981; border-radius: 50%; box-shadow: 0 0 8px #10b981; }
+                  body { background-color: #0b0f19; color: #f3f4f6; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                  h1 { color: #ffcc00; font-size: 2rem; margin-bottom: 1rem; }
+                  .status-card { background-color: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 1rem; margin-top: 2rem; display: inline-flex; align-items: center; gap: 10px; }
+                  .dot { width: 10px; height: 10px; background-color: #10b981; border-radius: 50%; }
                   .status-text { font-weight: 500; color: #10b981; }
               </style>
           </head>
           <body>
-              <div class="container">
-                  <h1>Cluster Inference Node #04</h1>
-                  <p>Distributed training environment initialized. Token generation endpoints and model validation pipelines are fully operational.</p>
-                  <p style="font-size: 0.9rem; color: #4b5563;">Unauthorized access to infrastructure telemetry is strictly prohibited.</p>
+              <div>
+                  <h1>Model Inference API</h1>
                   <div class="status-card">
                       <div class="dot"></div>
-                      <span class="status-text">Node Status: Active & Healthy</span>
+                      <span class="status-text">Endpoint: Active</span>
                   </div>
               </div>
           </body>
           </html>
           EOF
 
-          # 3. 生成容器启动入口脚本
+          # 3. 启动脚本 (全程 Root，直接起 nginx 和 code-server)
           cat << 'EOF' > entrypoint.sh
           #!/bin/bash
-          # 启动 Nginx (使用 sudo，因为官方镜像的 coder 用户拥有无密码 sudo 权限)
-          sudo nginx
-          # 启动 code-server 并将其绑定在 127.0.0.1 阻断外界直接访问
+          nginx
           exec code-server --bind-addr 127.0.0.1:8080 --auth none
           EOF
 
-          # 4. 生成统一的 Dockerfile
+          # 4. Dockerfile (去掉所有权限切换，一路 Root 到底)
           cat << 'EOF' > Dockerfile
           FROM codercom/code-server:latest
 
+          # 强制全局 Root
           USER root
 
-          # 安装 Nginx 以及基础环境 (Python3)
+          # 安装 Nginx、Python 和基础工具
           RUN apt-get update && apt-get install -y \
-              nginx \
-              git curl wget \
-              python3 python3-pip python3-venv \
+              nginx git curl wget python3 python3-pip python3-venv \
               && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-          # 安装 Node.js 20 和 pnpm
+          # 安装 Node.js 和 pnpm
           RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
               apt-get install -y nodejs && \
               npm install -g pnpm
 
-          # 移动配置文件与启动脚本
+          # 复制配置文件
           COPY nginx.conf /etc/nginx/nginx.conf
           COPY index.html /var/www/html/index.html
           COPY entrypoint.sh /entrypoint.sh
           RUN chmod +x /entrypoint.sh
 
-          # 切换回默认的 coder 用户以安全地配置 VS Code 环境
-          USER coder
-
-          # 预装 VS Code 常用扩展插件（Python 语言支持、GitLens、ESLint）
+          # 直接以 Root 身份安装 VS Code 扩展
           RUN code-server --install-extension ms-python.python \
               && code-server --install-extension eamodio.gitlens \
               && code-server --install-extension dbaeumer.vscode-eslint
 
-          EXPOSE 7890
+          # 暴露 7860 端口
+          EXPOSE 7860
 
           ENTRYPOINT ["/entrypoint.sh"]
           EOF
@@ -145,13 +134,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
+          tags: type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
