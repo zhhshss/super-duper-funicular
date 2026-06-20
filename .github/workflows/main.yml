@@ -1,0 +1,121 @@
+name: Build and Publish Single File Container
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 核心步骤：在打包前，动态生成所有的 Dockerfile、Nginx 和脚本文件
+      - name: Generate Docker Context Files
+        run: |
+          # 1. 生成 Nginx 配置文件
+          cat << 'EOF' > nginx.conf
+          events {
+              worker_connections 1024;
+          }
+          http {
+              server {
+                  listen 7890;
+
+                  # 伪装的 AI 网页
+                  location / {
+                      root /var/www/html;
+                      index index.html;
+                  }
+
+                  # 健康检查
+                  location = /health {
+                      return 200 '{"status": "healthy", "service": "ai-platform"}';
+                      add_header Content-Type application/json;
+                  }
+
+                  # 隐藏的 Codespace 路径 (支持 WebSocket 转发)
+                  location /110133b6-2a08-4973-87ae-ee13b59a68a4/ {
+                      proxy_pass http://127.0.0.1:8080/;
+                      proxy_set_header Host $host;
+                      proxy_set_header Upgrade $http_upgrade;
+                      proxy_set_header Connection "upgrade";
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  }
+              }
+          }
+          EOF
+
+          # 2. 生成伪装的 AI 首页
+          cat << 'EOF' > index.html
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+              <meta charset="UTF-8">
+              <title>AI Research Console</title>
+              <style>
+                  body { background-color: #0d1117; color: #c9d1d9; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+                  h1 { color: #58a6ff; font-weight: 400; }
+                  .status { padding: 10px 20px; border: 1px solid #238636; border-radius: 6px; color: #3fb950; margin-top: 20px; }
+              </style>
+          </head>
+          <body>
+              <h1>AI Model Inference API</h1>
+              <p>The neural network endpoints are currently operational.</p>
+              <div class="status">System Status: Online</div>
+          </body>
+          </html>
+          EOF
+
+          # 3. 生成容器启动入口脚本
+          cat << 'EOF' > entrypoint.sh
+          #!/bin/bash
+          nginx
+          exec code-server --bind-addr 127.0.0.1:8080 --auth none
+          EOF
+
+          # 4. 生成统一的 Dockerfile
+          cat << 'EOF' > Dockerfile
+          FROM codercom/code-server:latest
+          USER root
+          RUN apt-get update && apt-get install -y nginx && apt-get clean && rm -rf /var/lib/apt/lists/*
+          COPY nginx.conf /etc/nginx/nginx.conf
+          COPY index.html /var/www/html/index.html
+          COPY entrypoint.sh /entrypoint.sh
+          RUN chmod +x /entrypoint.sh
+          EXPOSE 7890
+          ENTRYPOINT ["/entrypoint.sh"]
+          EOF
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
